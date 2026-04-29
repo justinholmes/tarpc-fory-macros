@@ -156,11 +156,14 @@ dependencies = [
  "bytes",
  "fory",
  "fory-core",
+ "futures",
+ "pin-project",
  "serde",
  "tarpc",
  "tarpc-fory",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
