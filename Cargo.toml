@@ -23,3 +23,6 @@ fory = "0.17"
 fory-core = "0.17"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+# fory-rpc-streaming needed so the macro-emitted ::fory_rpc_streaming:: path
+# resolves in streaming_register_call for services with streaming methods.
+fory-rpc-streaming = { path = "../fory-rpc-streaming" }

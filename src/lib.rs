@@ -8,6 +8,14 @@ use syn::{
     parse_macro_input,
 };
 
+/// Streaming mode for a service method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingMode {
+    Server,
+    Client,
+    Bidirectional,
+}
+
 /// Fory wire-schema attribute for tarpc services.
 ///
 /// Apply AFTER `#[tarpc::service]` on a trait definition. Receives the
@@ -69,10 +77,26 @@ pub fn fory_service(_attr: TokenStream, input: TokenStream) -> TokenStream {
         &camel_case_idents,
     );
 
-    // Emit the service trait unchanged + fory additions.
-    let mut output: TokenStream2 = quote! { #service_trait };
+    // Strip #[streaming(...)] attributes from the trait before re-emitting so
+    // that rustc / tarpc::service don't see them as unknown attributes.
+    let clean_trait = strip_streaming_attrs(service_trait);
+
+    // Emit the cleaned service trait + fory additions.
+    let mut output: TokenStream2 = quote! { #clean_trait };
     output.extend(fory_tokens);
     output.into()
+}
+
+/// Return a copy of the trait with all `#[streaming(...)]` attributes removed
+/// from every method, so downstream attribute macros (e.g. `tarpc::service`) and
+/// rustc never see them.
+fn strip_streaming_attrs(mut tr: ItemTrait) -> ItemTrait {
+    for item in &mut tr.items {
+        if let syn::TraitItem::Fn(method) = item {
+            method.attrs.retain(|attr| !is_streaming_attr(attr));
+        }
+    }
+    tr
 }
 
 /// Information extracted from a single RPC method on the service trait.
@@ -82,6 +106,8 @@ struct RpcMethod {
     args: Vec<PatType>,
     /// Return type (or `()` if none).
     output: Type,
+    /// Streaming mode if the method has `#[streaming(...)]`; `None` for unary.
+    streaming: Option<StreamingMode>,
 }
 
 /// Walk the trait items and collect async fn methods, skipping `serve`.
@@ -116,11 +142,37 @@ fn collect_rpc_methods(service_trait: &ItemTrait) -> Vec<RpcMethod> {
                 ReturnType::Default => unit.clone(),
             };
 
-            methods.push(RpcMethod { ident, args, output });
+            // Check for #[streaming(server|client|bidirectional)].
+            let streaming = method.attrs.iter().find_map(parse_streaming_attr);
+
+            methods.push(RpcMethod { ident, args, output, streaming });
         }
     }
 
     methods
+}
+
+/// Returns `true` if `attr` is a `#[streaming(...)]` attribute.
+fn is_streaming_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("streaming")
+}
+
+/// Parse `#[streaming(server)]`, `#[streaming(client)]`, or
+/// `#[streaming(bidirectional)]` from an attribute.
+///
+/// Returns `None` for any attribute that isn't a recognised streaming marker.
+fn parse_streaming_attr(attr: &syn::Attribute) -> Option<StreamingMode> {
+    if !is_streaming_attr(attr) {
+        return None;
+    }
+    // The attribute must look like #[streaming(mode)] where mode is a single ident.
+    let ident: syn::Ident = attr.parse_args().ok()?;
+    match ident.to_string().as_str() {
+        "server" => Some(StreamingMode::Server),
+        "client" => Some(StreamingMode::Client),
+        "bidirectional" => Some(StreamingMode::Bidirectional),
+        _ => None,
+    }
 }
 
 /// Returns true if the type looks like `context::Context` or `::tarpc::context::Context`.
@@ -274,6 +326,44 @@ fn generate_fory_impls(
 
     let service_marker_ident = format_ident!("{}Service", service_ident);
 
+    // -----------------------------------------------------------------------
+    // Streaming metadata
+    // -----------------------------------------------------------------------
+
+    // Collect (method_name_str, StreamingMode) for streaming methods only.
+    let streaming_entries: Vec<_> = methods
+        .iter()
+        .filter_map(|m| m.streaming.map(|mode| (m.ident.to_string(), mode)))
+        .collect();
+
+    let has_streaming = !streaming_entries.is_empty();
+
+    // Build the slice literal for streaming_methods().
+    let stream_entries_tokens: Vec<TokenStream2> = streaming_entries
+        .iter()
+        .map(|(name, mode)| {
+            let mode_token = match mode {
+                StreamingMode::Server => quote! { ::tarpc_fory::StreamingMode::Server },
+                StreamingMode::Client => quote! { ::tarpc_fory::StreamingMode::Client },
+                StreamingMode::Bidirectional => quote! { ::tarpc_fory::StreamingMode::Bidirectional },
+            };
+            quote! { (#name, #mode_token) }
+        })
+        .collect();
+
+    // Optional: emit register_stream_types call for the Request enum when any
+    // streaming methods exist. The call path is emitted as a token — the user's
+    // crate must have `fory-rpc-streaming` in its dependency tree for this to
+    // compile. When no streaming methods are present the call is omitted so
+    // the dep remains optional.
+    let streaming_register_call = if has_streaming {
+        quote! {
+            ::fory_rpc_streaming::register_stream_types::<#request_ident>(fory)?;
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         // -----------------------------------------------------------------------
         // ForyDefault + Serializer for XxxRequest  (EXT path)
@@ -391,6 +481,16 @@ fn generate_fory_impls(
         /// `tarpc_fory::listen` for zero-boilerplate fory transport.
         pub struct #service_marker_ident;
 
+        impl #service_marker_ident {
+            /// Returns the list of streaming methods and their modes.
+            ///
+            /// Unary methods are not included. Use this slice for dispatch
+            /// routing in S5/S6 transport integration.
+            pub fn streaming_methods() -> &'static [(&'static str, ::tarpc_fory::StreamingMode)] {
+                &[ #( #stream_entries_tokens ),* ]
+            }
+        }
+
         impl ::tarpc_fory::ServiceWireSchema for #service_marker_ident {
             type Req = #request_ident;
             type Resp = #response_ident;
@@ -414,6 +514,8 @@ fn generate_fory_impls(
                 fory.register_serializer::<#response_ident>(#resp_id_expr)?;
                 // User-defined types referenced in method signatures (STRUCT path via register).
                 #( #user_type_regs )*
+                // Streaming wire types (only emitted when the service has streaming methods).
+                #streaming_register_call
                 Ok(())
             }
         }
