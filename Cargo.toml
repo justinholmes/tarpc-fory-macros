@@ -13,3 +13,13 @@ proc-macro = true
 syn = { version = "2", features = ["full", "parsing", "printing", "visit"] }
 quote = "1"
 proc-macro2 = "1"
+
+[dev-dependencies]
+# tarpc-fory needed so ::tarpc_fory:: paths in the macro-generated code compile.
+# The basic.rs test does NOT use #[tarpc::service] so there are no duplicate-impl
+# conflicts with the fork's cfg(feature = "fory") gated code.
+tarpc-fory = { path = "../tarpc-fory" }
+fory = "0.17"
+fory-core = "0.17"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
