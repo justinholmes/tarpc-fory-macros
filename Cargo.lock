@@ -775,7 +775,7 @@ dependencies = [
  "pin-project",
  "serde",
  "tarpc",
- "tarpc-fory-macros",
+ "tarpc-fory-macros 0.1.0",
  "tokio",
  "tokio-serde",
  "tokio-serde-fory",
@@ -785,6 +785,17 @@ dependencies = [
 [[package]]
 name = "tarpc-fory-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb9a4ee17fea0cf2d15b475be35e1f572a4e9bcc378e2d2957d7c8738b4b95a9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "tarpc-fory-macros"
+version = "0.1.1"
 dependencies = [
  "fory",
  "fory-core",
@@ -900,6 +911,8 @@ dependencies = [
 [[package]]
 name = "tokio-serde-fory"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc8d42a23ca2043d6d55cf5dafb42ef0a975badc20a6c945c0e4329f05a9be84"
 dependencies = [
  "bytes",
  "fory",
